@@ -1,0 +1,12 @@
+id: matrix_news_bot
+url: http://localhost:9000
+as_token: "YOUR_AS_TOKEN_HERE"
+hs_token: "YOUR_HS_TOKEN_HERE"
+sender_localpart: matrix_news_bot
+namespaces:
+  users:
+    - exclusive: true
+      regex: '@matrix_news_bot:your\.server\.domain'
+  rooms: []
+  aliases: []
+rate_limited: false
