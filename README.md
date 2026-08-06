@@ -31,7 +31,7 @@ sequenceDiagram
     W->>S: POST /join/{room_id}<br/>(idempotent — failure is ignored)
     Note over W,S: A ghost user cannot join an invite-only room<br/>on its own — invite it beforehand.
 
-    W->>S: PUT /rooms/{room_id}/send/m.room.message<br/>?user_id=@webhook_bot:example.com
+    W->>S: PUT /rooms/{room_id}/send/m.room.message/{txnId}<br/>?user_id=@webhook_bot:example.com
     S->>R: m.room.message
     S-->>W: event_id
 

@@ -31,7 +31,7 @@ sequenceDiagram
     W->>S: POST /join/{room_id}<br/>(冪等・失敗は無視)
     Note over W,S: 招待制ルームにはゴーストユーザーが自力で参加できない。<br/>あらかじめ招待しておく。
 
-    W->>S: PUT /rooms/{room_id}/send/m.room.message<br/>?user_id=@webhook_bot:example.com
+    W->>S: PUT /rooms/{room_id}/send/m.room.message/{txnId}<br/>?user_id=@webhook_bot:example.com
     S->>R: m.room.message
     S-->>W: event_id
 
