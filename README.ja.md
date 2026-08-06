@@ -4,6 +4,42 @@
 
 このリポジトリには、Matrix ルームにメッセージを送信するためのウェブフック機能を提供する Matrix アプリケーションサービスが含まれています。外部サービスが簡単な HTTP POST リクエストを通じて Matrix ルームにメッセージを送信できるようにします。
 
+リクエストの形式は Slack の Incoming Webhooks に倣っています。そのため、Slack 互換の送信側をほとんど変更せずに Matrix へ向けられます。
+
+## 処理の流れ
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as クライアント<br/>(例: tomato-shrieker)
+    participant W as matrix-webhook<br/>(アプリケーションサービス)
+    participant S as Synapse
+    participant R as Matrix ルーム
+
+    C->>+W: POST /webhook<br/>{"text": "...", "channel": "#35;alerts:example.com"}
+
+    W->>S: POST /_matrix/client/v3/register<br/>(ゴーストユーザーを確保・冪等)
+    Note over W,S: 認証は AS_TOKEN。<br/>登録済みの場合も成功として扱う。
+
+    alt "channel" がルームエイリアスの場合
+        W->>S: GET /directory/room/{alias}
+        S-->>W: room_id
+    else "room_id" が直接指定された場合
+        Note over W: そのまま使用
+    end
+
+    W->>S: POST /join/{room_id}<br/>(冪等・失敗は無視)
+    Note over W,S: 招待制ルームにはゴーストユーザーが自力で参加できない。<br/>あらかじめ招待しておく。
+
+    W->>S: PUT /rooms/{room_id}/send/m.room.message<br/>?user_id=@webhook_bot:example.com
+    S->>R: m.room.message
+    S-->>W: event_id
+
+    W-->>-C: {"ok": true, "event_id": "..."}
+```
+
+送信専用のサービスです。ルームの読み取りや、Synapse からのイベント受信は行いません。
+
 ---
 
 ## 目次

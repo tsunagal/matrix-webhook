@@ -4,6 +4,42 @@
 
 This repository contains a Matrix Application Service that provides webhook functionality for sending messages to Matrix rooms. It allows external services to send messages to Matrix rooms via simple HTTP POST requests.
 
+The request format follows Slack's Incoming Webhooks, so existing Slack-compatible senders can post to Matrix with little or no change.
+
+## How it works
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client<br/>(e.g. tomato-shrieker)
+    participant W as matrix-webhook<br/>(Application Service)
+    participant S as Synapse
+    participant R as Matrix room
+
+    C->>+W: POST /webhook<br/>{"text": "...", "channel": "#35;alerts:example.com"}
+
+    W->>S: POST /_matrix/client/v3/register<br/>(ensure the ghost user exists — idempotent)
+    Note over W,S: Authenticated by AS_TOKEN.<br/>Already-registered is treated as success.
+
+    alt "channel" is a room alias
+        W->>S: GET /directory/room/{alias}
+        S-->>W: room_id
+    else "room_id" is given directly
+        Note over W: Used as is
+    end
+
+    W->>S: POST /join/{room_id}<br/>(idempotent — failure is ignored)
+    Note over W,S: A ghost user cannot join an invite-only room<br/>on its own — invite it beforehand.
+
+    W->>S: PUT /rooms/{room_id}/send/m.room.message<br/>?user_id=@webhook_bot:example.com
+    S->>R: m.room.message
+    S-->>W: event_id
+
+    W-->>-C: {"ok": true, "event_id": "..."}
+```
+
+The service only sends messages. It does not read the room or receive events from Synapse.
+
 ---
 
 ## Table of Contents
