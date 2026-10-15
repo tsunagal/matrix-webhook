@@ -1,5 +1,7 @@
 from __future__ import annotations
 import os, uuid, urllib.parse, requests, json
+from html.parser import HTMLParser
+import nh3
 from fastapi import FastAPI, Request, HTTPException
 
 # ─── Config ──────────────────────────────────────────────────────────
@@ -53,14 +55,86 @@ def ensure_join(room: str) -> None:
        params={"access_token": AS_TOK, "user_id": USER_ID})
 
 
+# ─── HTML sanitising (Matrix spec: m.room.message formatted_body) ────
+ALLOWED_TAGS = {
+    "font", "del", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "p",
+    "a", "ul", "ol", "sup", "sub", "li", "b", "i", "u", "strong", "em", "s",
+    "code", "hr", "br", "div", "table", "thead", "tbody", "tr", "th", "td",
+    "caption", "pre", "span", "img", "details", "summary",
+}
+ALLOWED_ATTRS = {
+    "font": {"data-mx-bg-color", "data-mx-color", "color"},
+    "span": {"data-mx-bg-color", "data-mx-color", "data-mx-spoiler", "data-mx-maths"},
+    "div":  {"data-mx-maths"},
+    "a":    {"href", "target"},
+    "img":  {"width", "height", "alt", "title", "src"},
+    "ol":   {"start"},
+    "code": {"class"},
+}
+URL_SCHEMES = {"https", "http", "ftp", "mailto", "magnet", "mxc"}
+
+
+def _filter_attr(tag: str, attr: str, value: str) -> str | None:
+    if tag == "img" and attr == "src" and not value.startswith("mxc://"):
+        return None
+    if tag == "code" and attr == "class" and not value.startswith("language-"):
+        return None
+    return value
+
+
+def sanitize_html(text: str) -> str:
+    return nh3.clean(text, tags=ALLOWED_TAGS, attributes=ALLOWED_ATTRS,
+                     url_schemes=URL_SCHEMES, attribute_filter=_filter_attr,
+                     link_rel=None)
+
+
+class _PlainText(HTMLParser):
+    BLOCK = {"p", "div", "ul", "ol", "tr", "blockquote", "pre",
+             "h1", "h2", "h3", "h4", "h5", "h6"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "br":
+            self.parts.append("\n")
+        elif tag == "li":
+            self.parts.append("\n- ")
+        elif tag == "img":
+            self.parts.append(dict(attrs).get("alt") or "")
+
+    def handle_endtag(self, tag):
+        if tag in self.BLOCK:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        self.parts.append(data)
+
+
+def html_to_text(text: str) -> str:
+    parser = _PlainText()
+    parser.feed(text)
+    parser.close()
+    lines = [line.rstrip() for line in "".join(parser.parts).split("\n")]
+    return "\n".join(lines).strip("\n")
+
+
+def build_content(text: str, html: bool) -> dict:
+    if not html:
+        return {"msgtype": "m.text", "body": text}
+    formatted = sanitize_html(text)
+    return {
+        "msgtype": "m.text",
+        "body": html_to_text(formatted),
+        "format": "org.matrix.custom.html",
+        "formatted_body": formatted,
+    }
+
+
 def send(room_id: str, body: str, html: bool) -> str:
     txn  = uuid.uuid4().hex
-    content = {"msgtype": "m.text", "body": body}
-    if html:
-        content |= {
-            "format": "org.matrix.custom.html",
-            "formatted_body": body
-        }
+    content = build_content(body, html)
     r = mx("PUT",
            f"/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn}",
            params={"access_token": AS_TOK, "user_id": USER_ID},
