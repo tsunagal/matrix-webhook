@@ -1,58 +1,27 @@
 from __future__ import annotations
-import os, uuid, urllib.parse, requests, json
+from contextlib import asynccontextmanager
 from html.parser import HTMLParser
+import logging
 import nh3
 from fastapi import FastAPI, Request, HTTPException
+from mautrix.errors import MatrixRequestError
+from mautrix.types import EventType, RoomAlias, RoomID
 
-# ─── Config ──────────────────────────────────────────────────────────
-MX      = os.getenv("MATRIX_URL", "http://localhost:8008").rstrip("/")
-AS_TOK  = os.environ["AS_TOKEN"]
-LOCAL   = os.getenv("BOT_LOCALPART", "webhook_bot")
-SERVER  = os.getenv("SERVER_NAME",   "localhost")
-USER_ID = f"@{LOCAL}:{SERVER}"
+from crypto import get_bot, start_bot, stop_bot
 
-app = FastAPI()
+logging.basicConfig(level=logging.INFO)
 
 
-# ─── Helper for HTTP calls ───────────────────────────────────────────
-def mx(method: str, path: str, **kw) -> requests.Response:
-    return requests.request(method, f"{MX}{path}", timeout=5, **kw)
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    await start_bot()
+    try:
+        yield
+    finally:
+        await stop_bot()
 
 
-# ─── Ensure the ghost user exists ────────────────────────────────────
-def ensure_registered() -> None:
-    payload = {"username": LOCAL, "type": "m.login.application_service"}
-    r = mx("POST",
-           "/_matrix/client/v3/register",
-           params={"access_token": AS_TOK},
-           json=payload)
-    if r.status_code == 200:
-        return                                # success
-    if r.status_code == 400:                  # could be already registered
-        try:
-            err = r.json().get("errcode", "")
-        except json.JSONDecodeError:
-            err = ""
-        if err in ("M_USER_IN_USE", "M_EXCLUSIVE"):
-            return                            # already exists → fine
-    r.raise_for_status()
-
-
-# ─── Matrix primitives ───────────────────────────────────────────────
-def alias_to_room_id(alias: str) -> str:
-    enc = urllib.parse.quote(alias)
-    r = mx("GET",
-           f"/_matrix/client/v3/directory/room/{enc}",
-           params={"access_token": AS_TOK})
-    r.raise_for_status()
-    return r.json()["room_id"]
-
-
-def ensure_join(room: str) -> None:
-    enc = urllib.parse.quote(room)
-    mx("POST",
-       f"/_matrix/client/v3/join/{enc}",
-       params={"access_token": AS_TOK, "user_id": USER_ID})
+app = FastAPI(lifespan=lifespan)
 
 
 # ─── HTML sanitising (Matrix spec: m.room.message formatted_body) ────
@@ -132,15 +101,16 @@ def build_content(text: str, html: bool) -> dict:
     }
 
 
-def send(room_id: str, body: str, html: bool) -> str:
-    txn  = uuid.uuid4().hex
-    content = build_content(body, html)
-    r = mx("PUT",
-           f"/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn}",
-           params={"access_token": AS_TOK, "user_id": USER_ID},
-           json=content)
-    r.raise_for_status()
-    return r.json()["event_id"]
+async def resolve_room(target: str) -> RoomID:
+    if target.startswith("#"):
+        return (await get_bot().client.resolve_room_alias(RoomAlias(target))).room_id
+    return RoomID(target)
+
+
+async def send(room_id: RoomID, body: str, html: bool) -> str:
+    return await get_bot().client.send_message_event(
+        room_id, EventType.ROOM_MESSAGE, build_content(body, html)
+    )
 
 
 # ─── Webhook endpoint ────────────────────────────────────────────────
@@ -156,22 +126,31 @@ async def webhook(req: Request):
     if not target:
         raise HTTPException(400, "`channel` or `room_id` is required")
 
-    # make sure bot exists
-    ensure_registered()
-
-    # alias → room-ID
-    room_id = alias_to_room_id(target) if target.startswith("#") else target
+    try:
+        room_id = await resolve_room(target)
+    except MatrixRequestError as e:
+        raise HTTPException(500, f"Matrix error: {e}")
 
     # join (idempotent)
     try:
-        ensure_join(room_id)
-    except Exception:
+        await get_bot().client.join_room(room_id, max_retries=0)
+    except MatrixRequestError:
         pass                                   # invite-only room w/out invite
 
-    #  send
     try:
-        eid = send(room_id, text, p.get("format") == "html")
-    except requests.HTTPError as e:
-        raise HTTPException(500, f"Matrix error: {e.response.text}")
+        eid = await send(room_id, text, p.get("format") == "html")
+    except MatrixRequestError as e:
+        raise HTTPException(500, f"Matrix error: {e}")
 
     return {"ok": True, "event_id": eid}
+
+
+@app.get("/health")
+async def health():
+    bot = get_bot()
+    return {
+        "ok": bot.ready,
+        "device_id": bot.client.device_id or None,
+        "crypto_ready": bot.ready,
+        "cross_signed": bot.cross_signed,
+    }

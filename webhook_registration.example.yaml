@@ -10,3 +10,5 @@ namespaces:
   rooms: []
   aliases: []
 rate_limited: false
+# Lets the service create its own device for end-to-end encryption (MSC4190)
+io.element.msc4190: true

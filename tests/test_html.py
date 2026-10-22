@@ -49,21 +49,18 @@ def test_webhook_endpoint_sends_sanitized_content(monkeypatch):
 
     sent = {}
 
-    class Resp:
-        status_code = 200
+    class FakeClient:
+        async def join_room(self, room_id, max_retries=0):
+            return room_id
 
-        def raise_for_status(self):
-            pass
+        async def send_message_event(self, room_id, event_type, content):
+            sent.update(content)
+            return "$e"
 
-        def json(self):
-            return {"event_id": "$e", "room_id": "!r:s"}
+    class FakeBot:
+        client = FakeClient()
 
-    def fake_mx(method, path, **kw):
-        if "/send/" in path:
-            sent.update(kw["json"])
-        return Resp()
-
-    monkeypatch.setattr(main, "mx", fake_mx)
+    monkeypatch.setattr(main, "get_bot", lambda: FakeBot())
     r = TestClient(main.app).post("/webhook", json={
         "room_id": "!r:s", "format": "html",
         "text": '<b>ok</b><img src=x onerror="alert(1)">',
