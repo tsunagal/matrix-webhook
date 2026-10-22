@@ -1,4 +1,6 @@
 fastapi
 uvicorn[standard]
-requests
 nh3
+mautrix[encryption]==0.21.1
+aiosqlite
+asyncpg

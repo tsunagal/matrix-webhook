@@ -13,7 +13,8 @@ This repository contains a Matrix Application Service that provides webhook func
 3. [Environment Variables](#environment-variables)
 4. [Configuration](#configuration)
 5. [Running the Service](#running-the-service)
-6. [Usage Examples](#usage-examples)
+6. [End-to-end encryption](#end-to-end-encryption)
+7. [Usage Examples](#usage-examples)
 
 ---
 
@@ -42,6 +43,9 @@ MATRIX_URL=http://host.docker.internal:8008  # URL of your Matrix homeserver, eg
 SERVER_NAME=localhost                        # Your Matrix server name, it should match the server_name in your homeserver.yaml config
 BOT_LOCALPART=webhook_bot                   # Bot username localpart
 AS_TOKEN=<generated>                        # Application Service token randomly generated
+CRYPTO_DB_DIR=/data                         # Where the bot keeps its encryption keys (mount a persistent volume here)
+RECOVERY_KEY=                               # The bot's recovery key; needed again when the /data volume is lost
+PICKLE_KEY=matrix-webhook                   # Optional: key used to encrypt the stored Olm account
 ```
 
 These environment variables are used to configure the webhook service. The `.env` file should be kept secure and never committed to version control.
@@ -72,6 +76,18 @@ docker-compose up -d
    ```
 
 The service will listen on port 9000 by default.
+
+---
+
+## End-to-end encryption
+
+Messages to encrypted rooms are sent encrypted. The bot has its own device and keeps its keys in a SQLite file under `CRYPTO_DB_DIR` (`/data` in Docker).
+
+- **Homeserver**: the appservice registration needs `io.element.msc4190: true` (the bot creates its own device; Synapse 1.159 needs no other setting). Synapse then requires the bot's registration to use `inhibit_login`, which the service does by itself.
+- **Persistent volume**: `/data` must survive restarts (`./data:/data` in `docker-compose.yml`). Run only one instance.
+- **Recovery key**: on the first start the bot creates its cross-signing identity and writes the recovery key to `/data/recovery_key.txt`. Store it with the other secrets, put it in `RECOVERY_KEY`, and delete the file.
+- **If `/data` is lost**: the bot creates a new device and deletes its old ones. With `RECOVERY_KEY` set it signs the new device with the same identity, so members keep trusting it.
+- The bot only syncs memberships, encryption state and key traffic; it never syncs message contents. New members and new devices receive the key with the next post. Posts made before someone joined stay unreadable to them, as with any member's messages.
 
 ---
 
