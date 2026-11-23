@@ -13,7 +13,7 @@ import sys
 from pathlib import Path as FsPath
 
 from mautrix.api import Method, Path
-from mautrix.client import Client, InternalEventType
+from mautrix.client import Client, InternalEventType, SyncStream
 from mautrix.client.state_store.asyncpg import PgStateStore
 from mautrix.crypto import OlmMachine, PgCryptoStateStore, PgCryptoStore
 from mautrix.errors import MatrixRequestError, MUnknownToken
@@ -189,7 +189,8 @@ class Bot:
         return self.client.mxid in resp.master_keys
 
     async def _on_member(self, evt: StateEvent) -> None:
-        if evt.state_key == self.client.mxid and evt.content.membership == Membership.INVITE:
+        if (evt.source & SyncStream.INVITED_ROOM and evt.state_key == self.client.mxid
+                and evt.content.membership == Membership.INVITE):
             try:
                 await self.client.join_room(evt.room_id)
                 log.info("Joined %s after an invite", evt.room_id)
@@ -209,15 +210,22 @@ _bot: Bot | None = None
 async def start_bot() -> Bot:
     global _bot
     _bot = Bot()
-    await _bot.start()
+    try:
+        await _bot.start()
+    except BaseException:
+        try:
+            await stop_bot()
+        except Exception:
+            log.exception("Could not clean up after the failed startup")
+        raise
     return _bot
 
 
 async def stop_bot() -> None:
     global _bot
-    if _bot:
-        await _bot.stop()
-    _bot = None
+    bot, _bot = _bot, None
+    if bot:
+        await bot.stop()
 
 
 def get_bot() -> Bot:

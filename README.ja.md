@@ -103,13 +103,55 @@ curl -X POST http://localhost:9000/webhook \
      -d '{"text":"Webhook via AS works test!","channel":"#test:localhost"}'
 ```
 
+投稿ごとに、Tsunagal と同じ形で新しいスレッドを作ります。スレッドのルートにタイトル、最初の返信に本文が入ります。
+
 成功レスポンス：
 
 ```json
 {
   "ok": true,
-  "event_id": "$VLnAIICMyUu8m39dA6lftWHz11B-WJzsRUtNuYg5mjQ"
+  "event_id": "$VLnAIICMyUu8m39dA6lftWHz11B-WJzsRUtNuYg5mjQ",
+  "thread_root": "$NhJ6sR3_nRiKwxQE-MVmQr0NlvOtVE494UQE7j3Uddk"
 }
+```
+
+`event_id` は本文（返信）、`thread_root` はスレッドのルートです。`"thread": false` のときは `null` です。
+
+### リクエストのフィールド
+
+| フィールド | 型 | 既定値 | 説明 |
+|-----------|----|--------|------|
+| `text` | 文字列 | — | メッセージ。必須。ただし新しいスレッドで `title` を指定したときは省略できます。 |
+| `channel` / `room_id` | 文字列 | — | ルームのエイリアス（`#room:server`）またはルーム ID（`!id:server`）。どちらかが必須です。 |
+| `format` | 文字列 | プレーン | `"html"` のとき `text` を HTML として扱います。サニタイズして本文に使います。スレッドのルートは常にプレーンテキストです。 |
+| `title` | 文字列 | — | スレッドのタイトル。改行と連続した空白は 1 つの空白にまとめ、本文から取るタイトルと同じく 60 文字で切ります。 |
+| `thread` | 真偽値 | `true` | `false` のとき、これまでどおりスレッドなしのメッセージを 1 件送ります。 |
+| `thread_root` | 文字列 | — | 同じルームにある既存のスレッドのルートのイベント ID。投稿はそのスレッドへの返信 1 件になります。 |
+| `thread_ts` | 文字列 | — | Slack 形式の `thread_root` の別名。イベント ID（`$` で始まる値）のときだけ使います。`"1503435956.000247"` のような Slack のタイムスタンプや数値は無視し、これまでどおり新しいスレッドを作ります。両方を指定するときは同じ値にしてください。 |
+
+### タイトルと本文
+
+- `title` があるとき：ルートは `title`、本文は `text` 全体です。`text` が空のときは、Tsunagal が空のスレッドに使うものと同じ `ここから会話を始めます。` を本文にします。
+- `title` がないとき：`text` の最初の空でない行をルートにします（`format: "html"` のときはプレーンテキストに変換したものから取り、HTML のままは使いません）。
+  - 60 文字を超えるタイトルは 59 文字で切り、末尾に `…` を付けます。絵文字は途中で切りません（肌の色、ZWJ でつないだ絵文字、国旗、キーキャップは丸ごと残すか丸ごと外します）。
+  - `text` に続きの行があり、タイトルを切っていないときは、残りの行を本文にします。それ以外（1 行だけ、またはタイトルを切ったとき）は `text` 全体を本文にします。`format: "html"` のときは、マークアップを壊さないよう常に `text` 全体を本文にします。
+- ルートを送ったあとに本文を送れなかったときは、本文のないスレッドが残らないようルートを削除（redact）し、500 を返します。
+
+```bash
+# タイトルと本文
+curl -X POST http://localhost:9000/webhook \
+     -H 'Content-Type: application/json' \
+     -d '{"title":"デプロイ完了","text":"tsunagal-web v2026.11.0 を公開しました","channel":"#test:localhost"}'
+
+# 上で作ったスレッドに返信
+curl -X POST http://localhost:9000/webhook \
+     -H 'Content-Type: application/json' \
+     -d '{"text":"ロールバックしました","thread_root":"$NhJ6sR3_nRiKwxQE-MVmQr0NlvOtVE494UQE7j3Uddk","channel":"#test:localhost"}'
+
+# スレッドなしのメッセージ 1 件
+curl -X POST http://localhost:9000/webhook \
+     -H 'Content-Type: application/json' \
+     -d '{"text":"ping","thread":false,"channel":"#test:localhost"}'
 ```
 
 ### メッセージフォーマットオプション
@@ -143,9 +185,9 @@ curl -X POST http://localhost:9000/webhook \
 サービスは適切な HTTP ステータスコードと JSON レスポンスを返します：
 
 - 200: メッセージ送信成功
-- 400: 無効なリクエストフォーマット
-- 401: 認証失敗
-- 404: ルームが見つからない
+- 400: 無効なリクエスト：本文が JSON オブジェクトでない、フィールドの型が違う、`text` がない、または `thread_root` がスレッドのルートでない（返信、リレーション、ステートイベント、削除済みのイベント）
+- 403: ボットがルームに参加・投稿できない（例：招待されていないプライベートルーム）
+- 404: ルームまたは `thread_root` が見つからない
 - 500: 内部サーバーエラー
 
 エラーレスポンス例：
