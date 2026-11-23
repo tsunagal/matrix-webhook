@@ -103,13 +103,55 @@ curl -X POST http://localhost:9000/webhook \
      -d '{"text":"Webhook via AS works test!","channel":"#test:localhost"}'
 ```
 
+Each post opens a new thread, the same way Tsunagal does: the thread root holds the title and the first reply holds the body.
+
 Successful response:
 
 ```json
 {
   "ok": true,
-  "event_id": "$VLnAIICMyUu8m39dA6lftWHz11B-WJzsRUtNuYg5mjQ"
+  "event_id": "$VLnAIICMyUu8m39dA6lftWHz11B-WJzsRUtNuYg5mjQ",
+  "thread_root": "$NhJ6sR3_nRiKwxQE-MVmQr0NlvOtVE494UQE7j3Uddk"
 }
+```
+
+`event_id` is the body (the reply), `thread_root` the root of the thread. With `"thread": false` it is `null`.
+
+### Request fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `text` | string | — | The message. Required, except when `title` is given for a new thread. |
+| `channel` / `room_id` | string | — | Room alias (`#room:server`) or room ID (`!id:server`). One of them is required. |
+| `format` | string | plain | `"html"`: `text` is HTML. It is sanitised and applies to the body; the thread root is always plain text. |
+| `title` | string | — | Thread title. Line breaks and repeated spaces are collapsed; cut to 60 characters like a derived title. |
+| `thread` | boolean | `true` | `false` sends one flat message as before. |
+| `thread_root` | string | — | Event ID of an existing thread root in the same room: the post becomes one reply in that thread. |
+| `thread_ts` | string | — | Slack-style alias of `thread_root`, used only when it is an event ID (starts with `$`). Slack timestamps such as `"1503435956.000247"` or numbers are ignored and a new thread is created, as before. If both are given they must be equal. |
+
+### Title and body
+
+- With `title`: the root is `title` and the body is the whole `text`. If `text` is empty, the body is the same placeholder Tsunagal uses for an empty thread, `ここから会話を始めます。`.
+- Without `title`: the root is the first non-empty line of `text` (for `format: "html"`, of its plain-text rendering, never raw HTML).
+  - A title longer than 60 characters is cut to 59 and ends with `…`. Emoji are never split (skin tones, ZWJ sequences, flags and keycaps stay whole or are dropped together).
+  - If `text` has more lines and the title was not cut, the body is the remaining lines. Otherwise (one line, or the title was cut) the body is the whole `text`. With `format: "html"` the body is always the whole `text`, so the markup stays intact.
+- If the body cannot be sent after the root was sent, the root is redacted, so no thread without a body is left, and the service answers 500.
+
+```bash
+# Title and body
+curl -X POST http://localhost:9000/webhook \
+     -H 'Content-Type: application/json' \
+     -d '{"title":"Deploy finished","text":"tsunagal-web v2026.11.0 is live","channel":"#test:localhost"}'
+
+# Reply in the thread created above
+curl -X POST http://localhost:9000/webhook \
+     -H 'Content-Type: application/json' \
+     -d '{"text":"Rolled back","thread_root":"$NhJ6sR3_nRiKwxQE-MVmQr0NlvOtVE494UQE7j3Uddk","channel":"#test:localhost"}'
+
+# One flat message, no thread
+curl -X POST http://localhost:9000/webhook \
+     -H 'Content-Type: application/json' \
+     -d '{"text":"ping","thread":false,"channel":"#test:localhost"}'
 ```
 
 ### Message Format Options
@@ -143,9 +185,9 @@ curl -X POST http://localhost:9000/webhook \
 The service returns appropriate HTTP status codes and JSON responses:
 
 - 200: Message sent successfully
-- 400: Invalid request format
-- 401: Authentication failed
-- 404: Room not found
+- 400: Invalid request: the body is not a JSON object, a field has the wrong type, `text` is missing, or `thread_root` is not a thread root (a reply, a relation, a state event or a redacted event)
+- 403: The bot may not join or post in the room (for example a private room it was not invited to)
+- 404: Room or `thread_root` not found
 - 500: Internal server error
 
 Example error response:

@@ -62,10 +62,10 @@ def test_webhook_endpoint_sends_sanitized_content(monkeypatch):
 
     monkeypatch.setattr(main, "get_bot", lambda: FakeBot())
     r = TestClient(main.app).post("/webhook", json={
-        "room_id": "!r:s", "format": "html",
+        "room_id": "!r:s", "format": "html", "thread": False,
         "text": '<b>ok</b><img src=x onerror="alert(1)">',
     })
-    assert r.json() == {"ok": True, "event_id": "$e"}
+    assert r.json() == {"ok": True, "event_id": "$e", "thread_root": None}
     assert sent["formatted_body"].startswith("<b>ok</b>")
     assert "onerror" not in sent["formatted_body"] and "src" not in sent["formatted_body"]
     assert sent["body"] == "ok"
