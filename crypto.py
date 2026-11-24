@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 from pathlib import Path as FsPath
+from typing import NoReturn
 
 from mautrix.api import Method, Path
 from mautrix.client import Client, InternalEventType, SyncStream
@@ -34,7 +35,9 @@ from mautrix.util.async_db import Database
 log = logging.getLogger("webhook.crypto")
 
 MX = os.getenv("MATRIX_URL", "http://localhost:8008").rstrip("/")
-AS_TOK = os.environ["AS_TOKEN"]
+AS_TOK = os.getenv("AS_TOKEN", "").strip()
+if not AS_TOK:
+    sys.exit("AS_TOKEN is not set: put the as_token of the appservice registration in .env")
 LOCAL = os.getenv("BOT_LOCALPART", "webhook_bot")
 SERVER = os.getenv("SERVER_NAME", "localhost")
 USER_ID = f"@{LOCAL}:{SERVER}"
@@ -56,6 +59,11 @@ SYNC_FILTER = Filter(
         account_data=RoomEventFilter(not_types=[_ALL]),
     ),
 )
+
+
+def _fail(message: str) -> NoReturn:
+    log.error(message)
+    raise RuntimeError(message)
 
 
 class Bot:
@@ -86,6 +94,7 @@ class Bot:
         await PgStateStore.upgrade_table.upgrade(self.db)
         await self.crypto_store.open()
 
+        await self._check_sender()
         await self._ensure_registered()
         await self._load_device()
         await self._ensure_cross_signed()
@@ -103,6 +112,19 @@ class Bot:
         await self.db.stop()
         await self.client.api.session.close()
 
+    async def _check_sender(self) -> None:
+        # Runs before _load_device sets as_user_id, so whoami answers for the appservice sender
+        try:
+            resp = await self.client.api.request(Method.GET, Path.v3.account.whoami)
+        except MatrixRequestError as e:
+            log.warning("Could not look up the appservice sender: %s", e)
+            return
+        if resp.get("user_id") == USER_ID:
+            _fail(
+                f"BOT_LOCALPART must not be the appservice's sender_localpart ({USER_ID}): "
+                "Synapse does not let that user /sync"
+            )
+
     async def _ensure_registered(self) -> None:
         try:
             await self.client.api.request(
@@ -111,7 +133,12 @@ class Bot:
                 {"username": LOCAL, "type": "m.login.application_service", "inhibit_login": True},
             )
         except MatrixRequestError as e:
-            if e.errcode not in ("M_USER_IN_USE", "M_EXCLUSIVE"):
+            if e.errcode == "M_EXCLUSIVE":
+                _fail(
+                    f"{USER_ID} is outside the appservice's user namespace: "
+                    "check BOT_LOCALPART, SERVER_NAME and the users regex of the registration"
+                )
+            if e.errcode != "M_USER_IN_USE":
                 raise
 
     async def _load_device(self) -> None:

@@ -11,25 +11,55 @@ This repository contains a Matrix Application Service that provides webhook func
 1. [Prerequisites](#prerequisites)
 2. [Initial Setup](#initial-setup)
 3. [Environment Variables](#environment-variables)
-4. [Configuration](#configuration)
-5. [Running the Service](#running-the-service)
-6. [End-to-end encryption](#end-to-end-encryption)
-7. [Usage Examples](#usage-examples)
+4. [Running the Service](#running-the-service)
+5. [End-to-end encryption](#end-to-end-encryption)
+6. [Usage Examples](#usage-examples)
+7. [Error Handling](#error-handling)
 
 ---
 
 ## Prerequisites
 
-- Docker & Docker Compose (v3.8+)
-- A running Matrix homeserver (Synapse)
-- Python 3.8+ (if running without Docker)
+- Docker and Docker Compose
+- A running Matrix homeserver (Synapse) whose `homeserver.yaml` you can edit
+- Python 3.10+ (if running without Docker)
 
 ---
 
 ## Initial Setup
 
-1. Clone this repository
-2. The Application Service configuration file `webhook_as.yaml` is located in the matrix-server directory. Find more details [here](https://github.com/bshock-matrix/matrix-server?tab=readme-ov-file#g-webhook-application-service).
+The service is a Matrix application service. Register it with Synapse once:
+
+1. Clone this repository.
+2. Copy the example registration:
+
+   ```bash
+   cp webhook_registration.example.yaml webhook_registration.yaml
+   ```
+
+3. Generate two random tokens and put them in `as_token` and `hs_token`:
+
+   ```bash
+   openssl rand -hex 32
+   ```
+
+4. In the users regex, replace `example\.com` with your `SERVER_NAME`, dots escaped. For `SERVER_NAME=matrix.example.org` the regex is `'@webhook_.*:matrix\.example\.org'`.
+5. Put the file where Synapse can read it and add its path to `homeserver.yaml`:
+
+   ```yaml
+   app_service_config_files:
+     - /data/webhook_registration.yaml
+   ```
+
+6. Restart Synapse.
+7. Copy `.env.example` to `.env` and set `AS_TOKEN` to the same value as `as_token` (see [Environment Variables](#environment-variables)).
+
+About the registration:
+
+- `url: null`: the service only sends messages. It has no endpoint for Synapse to push events to.
+- `sender_localpart` (`webhook_master`) must differ from `BOT_LOCALPART` (`webhook_bot`). Synapse does not let the sender user `/sync`, so the bot would never receive invites or encryption keys.
+- `BOT_LOCALPART` must match the users regex (`@webhook_.*`).
+- If one of these is wrong, or `AS_TOKEN` is missing, the service stops at startup with a message that names the setting to fix.
 
 ---
 
@@ -41,10 +71,10 @@ Copy `.env.example` to `.env` and configure the following variables:
 # Matrix Webhook Environment Variables
 MATRIX_URL=http://host.docker.internal:8008  # URL of your Matrix homeserver, eg. https://matrix.org
 SERVER_NAME=localhost                        # Your Matrix server name, it should match the server_name in your homeserver.yaml config
-BOT_LOCALPART=webhook_bot                   # Bot username localpart
-AS_TOKEN=<generated>                        # Application Service token randomly generated
+BOT_LOCALPART=webhook_bot                   # Bot username localpart; must match the users regex of the registration
+AS_TOKEN=<as_token>                         # The as_token of the registration
 CRYPTO_DB_DIR=/data                         # Where the bot keeps its encryption keys (mount a persistent volume here)
-RECOVERY_KEY=                               # The bot's recovery key; needed again when the /data volume is lost
+RECOVERY_KEY=                               # The bot's recovery key without spaces or quotes; needed again when the /data volume is lost
 PICKLE_KEY=matrix-webhook                   # Optional: key used to encrypt the stored Olm account
 ```
 
@@ -68,18 +98,23 @@ The port is published on `127.0.0.1:9000` only (this machine). Check it with `cu
 
 ### Without Docker
 
+Python 3.10 or later is required.
+
 1. Install dependencies:
 
    ```bash
    pip install -r requirements.txt
    ```
 
-2. Run the service:
+2. In `.env`, set `MATRIX_URL` to the homeserver URL as seen from this machine (for example `http://localhost:8008`) and `CRYPTO_DB_DIR` to a writable directory (for example `data`).
+3. Load `.env` and start the service:
+
    ```bash
-   python main.py
+   set -a; . ./.env; set +a
+   uvicorn main:app --host 127.0.0.1 --port 9000
    ```
 
-The service will listen on port 9000 by default.
+The service listens on `127.0.0.1:9000`.
 
 ---
 
@@ -89,7 +124,7 @@ Messages to encrypted rooms are sent encrypted. The bot has its own device and k
 
 - **Homeserver**: the appservice registration needs `io.element.msc4190: true` (the bot creates its own device; Synapse 1.159 needs no other setting). Synapse then requires the bot's registration to use `inhibit_login`, which the service does by itself.
 - **Persistent volume**: `/data` must survive restarts (`./data:/data` in `docker-compose.yml`). Run only one instance.
-- **Recovery key**: on the first start the bot creates its cross-signing identity and writes the recovery key to `/data/recovery_key.txt`. Store it with the other secrets, put it in `RECOVERY_KEY`, and delete the file.
+- **Recovery key**: on the first start the bot creates its cross-signing identity and writes the recovery key to `/data/recovery_key.txt`. Store it with the other secrets, put it in `RECOVERY_KEY` without spaces or quotes, and delete the file.
 - **If `/data` is lost**: the bot creates a new device and deletes its old ones. With `RECOVERY_KEY` set it signs the new device with the same identity, so members keep trusting it.
 - The bot only syncs memberships, encryption state and key traffic; it never syncs message contents. New members and new devices receive the key with the next post. Posts made before someone joined stay unreadable to them, as with any member's messages.
 
@@ -199,6 +234,8 @@ Example error response:
 ```json
 {
   "ok": false,
-  "error": "Room not found"
+  "error": "`channel` or `room_id` is required"
 }
 ```
+
+Errors from the homeserver are passed on as `"Matrix error: ..."` with the homeserver's message.
