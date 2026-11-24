@@ -1,12 +1,17 @@
-id: matrix_news_bot
-url: http://localhost:9000
-as_token: "YOUR_AS_TOKEN_HERE"
-hs_token: "YOUR_HS_TOKEN_HERE"
-sender_localpart: matrix_news_bot
+# Copy to your Synapse config directory and add the path to app_service_config_files in homeserver.yaml.
+id: webhook
+# The service only sends; it has no endpoint for Synapse to push to
+url: null
+# Generate each token with: openssl rand -hex 32 (as_token goes into .env as AS_TOKEN)
+as_token: "REPLACE_WITH_RANDOM_AS_TOKEN"
+hs_token: "REPLACE_WITH_RANDOM_HS_TOKEN"
+# Must differ from BOT_LOCALPART: Synapse does not let the sender user /sync
+sender_localpart: webhook_master
 namespaces:
   users:
+    # BOT_LOCALPART must match this regex. Replace example\.com with your SERVER_NAME (dots escaped)
     - exclusive: true
-      regex: '@matrix_news_bot:your\.server\.domain'
+      regex: '@webhook_.*:example\.com'
   rooms: []
   aliases: []
 rate_limited: false
