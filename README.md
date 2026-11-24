@@ -62,6 +62,10 @@ Start the service in detached mode:
 docker-compose up -d
 ```
 
+The port is published on `127.0.0.1:9000` only (this machine). Check it with `curl http://localhost:9000/health`. Set `url: null` in the appservice registration: the service never receives pushes from Synapse, and a `url` such as `http://localhost:9000` makes Synapse retry against itself.
+
+`/webhook` has no authentication, so do not publish it on `0.0.0.0`. To receive posts from other machines, put a reverse proxy (Caddy, nginx) in front of it and expose only the `/webhook` path (ideally a secret path), not `/health`. When the service runs inside the same Docker network as the proxy (for example in the Synapse compose), it needs no published port: the proxy reaches it at `http://webhook:9000`.
+
 ### Without Docker
 
 1. Install dependencies:
