@@ -62,6 +62,10 @@ PICKLE_KEY=matrix-webhook                   # 任意。保存する Olm アカ�
 docker-compose up -d
 ```
 
+ポートは `127.0.0.1:9000`（このマシン）にだけ公開します。`curl http://localhost:9000/health` で確認できます。アプリケーションサービスの登録ファイルでは `url: null` にしてください。このサービスは Synapse からの送信を受け取らず、`http://localhost:9000` のような `url` を書くと、Synapse が自分自身に送り直し続けます。
+
+`/webhook` には認証がないため、`0.0.0.0` には公開しないでください。ほかのマシンから受け取るときは、前にリバースプロキシ（Caddy、nginx）を置き、`/webhook` のパス（できれば秘密のパス）だけを公開し、`/health` は公開しないでください。プロキシと同じ Docker ネットワークで動かす場合（Synapse の compose の中など）は、ポートの公開は不要です。プロキシから `http://webhook:9000` で届きます。
+
 ### Docker なし
 
 1. 依存関係をインストール：
